@@ -1,5 +1,6 @@
 package main
 
+import "runtime/debug"
 import "fmt"
 import "bytes"
 import "strings"
@@ -10,7 +11,7 @@ import "golang.org/x/net/html/atom"
 import "sync"
 import "errors"
 
-const Address = "www.thelatinlibrary.com/"
+const Address = "www.thelatinlibrary.com"
 
 type outFile struct {
 	location string
@@ -19,6 +20,7 @@ type outFile struct {
 
 func main() {
 	c := make(chan outFile, 1000)
+	waiter := make(chan bool)
 	wg := sync.WaitGroup{}
 	url, err := url.Parse("http://" + Address)
 	if err != nil {
@@ -27,9 +29,16 @@ func main() {
 	}
 	wg.Add(1)
 	processSomething(url, c, &wg)
-	aFile := <-c
-	fmt.Println("File content was ", aFile.content)
-	wg.Wait()
+	for {
+		select {
+		case out := <-c:
+			fmt.Printf("Got a outFile; location is %s", out.location)
+			fmt.Println(out.content)
+		case <-waiter:
+			fmt.Println("Everything's done!")
+			return
+		}
+	}
 }
 
 func processSomething(url *url.URL, ret chan outFile, wg *sync.WaitGroup) {
@@ -41,14 +50,13 @@ func processSomething(url *url.URL, ret chan outFile, wg *sync.WaitGroup) {
 	}
 	response, err := http.Get(url.String())
 	if err != nil {
-		fmt.Printf("You passed in a bad URL: %s", url.String())
+		fmt.Printf("You passed in a bad URL: %s\n", url.String())
 		return
 	}
 	headNode, err := html.Parse(response.Body)
-	fmt.Printf("Parsed html for %s\n", url.String())
 
 	if err != nil {
-		fmt.Printf("Something bad happened with parsing %s", url.String())
+		fmt.Printf("Something bad happened with parsing %s\n", url.String())
 		return
 	}
 
@@ -70,16 +78,17 @@ func processList(path string, headNode *html.Node, ret chan outFile, wg *sync.Wa
 	tdAtom := getAtom("td")
 	nodes := GetAllChildNodes(headNode)
 	for _, n := range nodes {
-		if n.DataAtom == tdAtom {
+		// Sometimes they don't have the text and there are no child nodes to find
+		if n.DataAtom == tdAtom && n.FirstChild != nil {
 			anchor := n.FirstChild
 			href, err := getHref(anchor)
 			if err != nil {
-				fmt.Printf("We couldn't find the href on node %s on %s", n.Data, path)
+				fmt.Printf("We couldn't find the href on node %s on %s\n", n.Data, path)
 				continue
 			}
 			url, err := url.Parse(href)
 			if err != nil {
-				fmt.Printf("We couldn't parse the url %s", href)
+				fmt.Printf("We couldn't parse the url %s\n", href)
 				continue
 			}
 			wg.Add(1)
@@ -89,7 +98,7 @@ func processList(path string, headNode *html.Node, ret chan outFile, wg *sync.Wa
 	buffer := new(bytes.Buffer)
 	err := html.Render(buffer, getHTMLTag(nodes[0]))
 	if err != nil {
-		fmt.Printf("We couldn't render the nodes for %s. God help us", path)
+		fmt.Printf("We couldn't render the nodes for %s. God help us\n", path)
 		return
 	}
 	out.content = buffer.String()
@@ -102,9 +111,7 @@ func processWork(path string, headNode *html.Node, ret chan outFile, wg *sync.Wa
 	const minLength = 10
 	out := outFile{location: path}
 	nodes := GetAllChildNodes(headNode)
-            if nodes == nil {
-                fmt.Println("Something bad happened")
-            }
+
 	for _, n := range nodes {
 		if n.Type == html.TextNode {
 			text := n.Data
@@ -133,7 +140,7 @@ func processWork(path string, headNode *html.Node, ret chan outFile, wg *sync.Wa
 	buffer := new(bytes.Buffer)
 	err := html.Render(buffer, getHTMLTag(headNode))
 	if err != nil {
-		fmt.Printf("We couldn't render the nodes for %s. God help us", path)
+		fmt.Printf("We couldn't render the nodes for %s. God help us\n", path)
 		return
 	}
 	out.content = buffer.String()
@@ -164,8 +171,10 @@ func countTags(headNode *html.Node, name string, count *int) {
 	switch headNode.Type {
 	case html.DocumentNode:
 		countTags(headNode.FirstChild, name, count)
-		return
 	case html.ElementNode:
+		// Sometimes we end up in the middle somehow. Don't ask me
+		for walker := headNode; walker != nil; walker = walker.PrevSibling {
+		}
 		for walker := headNode; walker != nil; walker = walker.NextSibling {
 			if walker.DataAtom == tagHex {
 				*count += 1
@@ -173,7 +182,13 @@ func countTags(headNode *html.Node, name string, count *int) {
 			countTags(walker.FirstChild, name, count)
 		}
 	default:
-		return
+		// Who knows what this is
+		if headNode.FirstChild != nil {
+			countTags(headNode.FirstChild, name, count)
+		}
+		if headNode.NextSibling != nil {
+			countTags(headNode.NextSibling, name, count)
+		}
 	}
 }
 
@@ -193,6 +208,9 @@ func getAtom(tagName string) atom.Atom {
 }
 
 func getHref(n *html.Node) (string, error) {
+	if n == nil {
+		debug.PrintStack()
+	}
 	for _, attr := range n.Attr {
 		if attr.Key == "href" {
 			return attr.Val, nil
@@ -202,7 +220,7 @@ func getHref(n *html.Node) (string, error) {
 }
 
 func GetAllChildNodes(headNode *html.Node) []*html.Node {
-	out := make([]*html.Node, 5)
+	out := make([]*html.Node, 0)
 	getAllChildNodes(headNode, &out)
 	return out
 }
@@ -215,4 +233,9 @@ func getAllChildNodes(headNode *html.Node, l *[]*html.Node) {
 		*l = append(*l, walker)
 		getAllChildNodes(walker.FirstChild, l)
 	}
+}
+
+func waitForStuff(c chan bool, wg *sync.WaitGroup) {
+	wg.Wait()
+	c <- true
 }
