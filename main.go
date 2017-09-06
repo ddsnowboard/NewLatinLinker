@@ -1,6 +1,9 @@
 package main
 
 import "runtime/debug"
+import "regexp"
+import "os/exec"
+import "path"
 import "strings"
 import "io/ioutil"
 import "fmt"
@@ -44,7 +47,6 @@ func main() {
 	for {
 		select {
 		case out := <-c:
-			fmt.Printf("Got a outFile; location is %s\n", out.Location)
 			writeFile(&out)
 		case <-waiter:
 			fmt.Println("Everything's done!")
@@ -138,16 +140,17 @@ func processWork(path string, headNode *html.Node, ret chan outFile, synchro *sy
 			if len(text) > minLength {
 				n.Data = ""
 				for _, word := range strings.Split(text, " ") {
-					textNode := html.Node{Data: word}
+					textNode := html.Node{Type: html.TextNode,
+						Data: word + " "}
 					attributes := [...]html.Attribute{html.Attribute{Key: "href",
 						Val: fmt.Sprintf(whitakersWords, word)}}
-					newNode := html.Node{FirstChild: &textNode,
-						LastChild: &textNode,
-						Type:      html.ElementNode,
-						DataAtom:  atom.A,
-						Data:      "a",
-						Attr:      attributes[:]}
-					// TODO: This doesn't work and I don't know why
+					newNode := html.Node{
+						FirstChild: &textNode,
+						LastChild:  &textNode,
+						Type:       html.ElementNode,
+						DataAtom:   atom.A,
+						Data:       "a",
+						Attr:       attributes[:]}
 					n.Parent.AppendChild(&newNode)
 				}
 			}
@@ -158,6 +161,7 @@ func processWork(path string, headNode *html.Node, ret chan outFile, synchro *sy
 	err := html.Render(buffer, getHTMLTag(headNode))
 	if err != nil {
 		fmt.Printf("We couldn't render the nodes for %s. God help us\n", path)
+		fmt.Println("Error was", err)
 		return
 	}
 	out.Content = buffer.String()
@@ -271,11 +275,16 @@ func checkPath(path string, syncSet *mutexSet) bool {
 }
 
 func writeFile(f *outFile) {
-	// This doesn't work for creating stuff in folders, but I know how to fix it.
-	// Just give the whole location string to the file path library and tell it
-	// to exec() (https://golang.org/pkg/os/exec/) mkdir on everything it needs
-	// to. Not that hard.
 	const folder = "output/"
-	b := []byte(f.Content)
-	_ = ioutil.WriteFile(folder+f.Location, b, 0644)
+        re := regexp.MustCompile(`href\s*=\s*"(.*?)\.shtml"`)
+	location := folder + strings.Replace(f.Location, "shtml", "html", -1)
+	dir := path.Dir(location)
+	command := exec.Command("mkdir", "-p", dir)
+	command.Run()
+	b := []byte(re.ReplaceAllString(f.Content, `href="$1.html"`))
+        err := ioutil.WriteFile(location, b, 0644)
+        if err != nil {
+            fmt.Println("Something bad happened writing", location)
+            fmt.Println(err)
+        }
 }
