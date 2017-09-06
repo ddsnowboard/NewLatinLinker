@@ -1,9 +1,10 @@
 package main
 
 import "runtime/debug"
+import "strings"
+import "io/ioutil"
 import "fmt"
 import "bytes"
-import "strings"
 import "net/url"
 import "net/http"
 import "golang.org/x/net/html"
@@ -14,26 +15,37 @@ import "errors"
 const Address = "www.thelatinlibrary.com"
 
 type outFile struct {
-	location string
-	content  string
+	Location string
+	Content  string
+}
+
+type mutexSet struct {
+	Set   map[string]bool
+	Mutex sync.Mutex
+}
+
+type synchronyStuff struct {
+	Set mutexSet
+	Wg  sync.WaitGroup
 }
 
 func main() {
 	c := make(chan outFile, 1000)
 	waiter := make(chan bool)
-	wg := sync.WaitGroup{}
+	synchro := synchronyStuff{mutexSet{make(map[string]bool), sync.Mutex{}}, sync.WaitGroup{}}
 	url, err := url.Parse("http://" + Address)
 	if err != nil {
 		fmt.Println("Something bad happened with parsing the url")
 		return
 	}
-	wg.Add(1)
-	processSomething(url, c, &wg)
+	synchro.Wg.Add(1)
+	go processSomething(url, c, &synchro)
+	go waitForStuff(waiter, &synchro.Wg)
 	for {
 		select {
 		case out := <-c:
-			fmt.Printf("Got a outFile; location is %s", out.location)
-			fmt.Println(out.content)
+			fmt.Printf("Got a outFile; location is %s\n", out.Location)
+			writeFile(&out)
 		case <-waiter:
 			fmt.Println("Everything's done!")
 			return
@@ -41,8 +53,8 @@ func main() {
 	}
 }
 
-func processSomething(url *url.URL, ret chan outFile, wg *sync.WaitGroup) {
-	defer wg.Done()
+func processSomething(url *url.URL, ret chan outFile, synchro *synchronyStuff) {
+	defer synchro.Wg.Done()
 	// Figure out what it is and process it
 	if !url.IsAbs() {
 		url.Host = Address
@@ -64,17 +76,20 @@ func processSomething(url *url.URL, ret chan outFile, wg *sync.WaitGroup) {
 	numP := CountTags(headNode, "p")
 	// If there are more td's than paragraphs, it's probably a list page
 	if numTd > numP {
-		wg.Add(1)
-		go processList(url.RequestURI(), headNode, ret, wg)
+		synchro.Wg.Add(1)
+		go processList(url.RequestURI(), headNode, ret, synchro)
 	} else {
-		wg.Add(1)
-		go processWork(url.RequestURI(), headNode, ret, wg)
+		synchro.Wg.Add(1)
+		go processWork(url.RequestURI(), headNode, ret, synchro)
 	}
 }
 
-func processList(path string, headNode *html.Node, ret chan outFile, wg *sync.WaitGroup) {
-	defer wg.Done()
-	out := outFile{location: path}
+func processList(path string, headNode *html.Node, ret chan outFile, synchro *synchronyStuff) {
+	defer synchro.Wg.Done()
+	if checkPath(path, &synchro.Set) {
+		return
+	}
+	out := outFile{Location: path}
 	tdAtom := getAtom("td")
 	nodes := GetAllChildNodes(headNode)
 	for _, n := range nodes {
@@ -91,8 +106,8 @@ func processList(path string, headNode *html.Node, ret chan outFile, wg *sync.Wa
 				fmt.Printf("We couldn't parse the url %s\n", href)
 				continue
 			}
-			wg.Add(1)
-			go processSomething(url, ret, wg)
+			synchro.Wg.Add(1)
+			go processSomething(url, ret, synchro)
 		}
 	}
 	buffer := new(bytes.Buffer)
@@ -101,26 +116,29 @@ func processList(path string, headNode *html.Node, ret chan outFile, wg *sync.Wa
 		fmt.Printf("We couldn't render the nodes for %s. God help us\n", path)
 		return
 	}
-	out.content = buffer.String()
+	out.Content = buffer.String()
 	ret <- out
 }
 
-func processWork(path string, headNode *html.Node, ret chan outFile, wg *sync.WaitGroup) {
-	defer wg.Done()
+func processWork(path string, headNode *html.Node, ret chan outFile, synchro *synchronyStuff) {
+	defer synchro.Wg.Done()
+	if checkPath(path, &synchro.Set) {
+		return
+	}
 	const whitakersWords = "http://www.archives.nd.edu/cgi-bin/wordz.pl?keyword=%s"
 	const minLength = 10
-	out := outFile{location: path}
+	out := outFile{Location: path}
 	nodes := GetAllChildNodes(headNode)
 
 	for _, n := range nodes {
-		if n.Type == html.TextNode {
+		if n.Type == html.TextNode && n.Parent.DataAtom == getAtom("p") {
 			text := n.Data
 			// We have to make sure that this is big enough to actually have real text
 			// in it. It might not.
 			if len(text) > minLength {
 				n.Data = ""
 				for _, word := range strings.Split(text, " ") {
-					textNode := html.Node{}
+					textNode := html.Node{Data: word}
 					attributes := [...]html.Attribute{html.Attribute{Key: "href",
 						Val: fmt.Sprintf(whitakersWords, word)}}
 					newNode := html.Node{FirstChild: &textNode,
@@ -129,9 +147,8 @@ func processWork(path string, headNode *html.Node, ret chan outFile, wg *sync.Wa
 						DataAtom:  atom.A,
 						Data:      "a",
 						Attr:      attributes[:]}
-					textNode.Parent = &newNode
-					textNode.Data = word
-
+					// TODO: This doesn't work and I don't know why
+					n.Parent.AppendChild(&newNode)
 				}
 			}
 		}
@@ -143,7 +160,7 @@ func processWork(path string, headNode *html.Node, ret chan outFile, wg *sync.Wa
 		fmt.Printf("We couldn't render the nodes for %s. God help us\n", path)
 		return
 	}
-	out.content = buffer.String()
+	out.Content = buffer.String()
 	ret <- out
 }
 
@@ -238,4 +255,27 @@ func getAllChildNodes(headNode *html.Node, l *[]*html.Node) {
 func waitForStuff(c chan bool, wg *sync.WaitGroup) {
 	wg.Wait()
 	c <- true
+}
+
+// Returns whether the path was already done
+func checkPath(path string, syncSet *mutexSet) bool {
+	syncSet.Mutex.Lock()
+	defer syncSet.Mutex.Unlock()
+	_, present := syncSet.Set[path]
+	if present {
+		return true
+	} else {
+		syncSet.Set[path] = true
+		return false
+	}
+}
+
+func writeFile(f *outFile) {
+	// This doesn't work for creating stuff in folders, but I know how to fix it.
+	// Just give the whole location string to the file path library and tell it
+	// to exec() (https://golang.org/pkg/os/exec/) mkdir on everything it needs
+	// to. Not that hard.
+	const folder = "output/"
+	b := []byte(f.Content)
+	_ = ioutil.WriteFile(folder+f.Location, b, 0644)
 }
