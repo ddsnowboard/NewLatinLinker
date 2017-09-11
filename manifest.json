@@ -1,0 +1,29 @@
+{
+
+    "manifest_version": 2,
+    "name": "LatinLinker",
+    "version": "1.0",
+
+    "description": "Turns all words in a Latin Library page into links to dictionary entries",
+
+    "icons": {
+        "48": "icons/chain.svg",
+        "96": "icons/chain.svg"
+    },
+
+    "content_scripts": [
+        {
+            "matches": ["http://www.thelatinlibrary.com/*"],
+            "js": ["latinLinker.js"]
+        }
+    ], 
+
+    "page_action": {
+        "browser_style": true,
+        "default_icon": {
+            "19": "icons/chain.svg",
+            "38": "icons/chain.svg"
+        },
+        "default_title": "Latin Linkify"
+    }
+}
