@@ -11,7 +11,7 @@
         "96": "icons/chain.svg"
     },
     "background": {
-        "scripts": ["latinLinker.js"]
+        "scripts": ["background.js"]
     },
 
     "page_action": {
@@ -24,6 +24,7 @@
     },
     "permissions": [
         "tabs",
-        "pageAction"
+        "pageAction",
+        "activeTab"
     ]
 }
