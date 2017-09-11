@@ -10,13 +10,9 @@
         "48": "icons/chain.svg",
         "96": "icons/chain.svg"
     },
-
-    "content_scripts": [
-        {
-            "matches": ["http://www.thelatinlibrary.com/*"],
-            "js": ["latinLinker.js"]
-        }
-    ], 
+    "background": {
+        "scripts": ["latinLinker.js"]
+    },
 
     "page_action": {
         "browser_style": true,
@@ -24,6 +20,10 @@
             "19": "icons/chain.svg",
             "38": "icons/chain.svg"
         },
-        "default_title": "Latin Linkify"
-    }
+        "default_title": "Linkify"
+    },
+    "permissions": [
+        "tabs",
+        "pageAction"
+    ]
 }
