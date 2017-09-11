@@ -1,5 +1,6 @@
 function linkify(tab) {
     browser.tabs.executeScript({file: "linkify.js"});
+    browser.tabs.insertCSS({code: "a {color: black;}"});
 }
 browser.pageAction.onClicked.addListener(linkify);
 
