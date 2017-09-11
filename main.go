@@ -36,7 +36,8 @@ func main() {
 	c := make(chan outFile, 1000)
 	waiter := make(chan bool)
 	synchro := synchronyStuff{mutexSet{make(map[string]bool), sync.Mutex{}}, sync.WaitGroup{}}
-	url, err := url.Parse("http://" + Address)
+	// url, err := url.Parse("http://" + Address)
+	url, err := url.Parse("http://www.thelatinlibrary.com/lucan/lucan1.shtml")
 	if err != nil {
 		fmt.Println("Something bad happened with parsing the url")
 		return
@@ -129,8 +130,13 @@ func processWork(path string, headNode *html.Node, ret chan outFile, synchro *sy
 	}
 	const whitakersWords = "http://www.archives.nd.edu/cgi-bin/wordz.pl?keyword=%s"
 	const minLength = 10
+	splitters := regexp.MustCompile("[!-/:-@[-`{-~ \n]")
+        whitespace := regexp.MustCompile("^\\s+$")
 	out := outFile{Location: path}
 	nodes := GetAllChildNodes(headNode)
+	for _, n := range nodes {
+		fmt.Printf("Type is %s and data is %s\n", n.Type, n.Data)
+	}
 
 	for _, n := range nodes {
 		if n.Type == html.TextNode && n.Parent.DataAtom == getAtom("p") {
@@ -139,7 +145,10 @@ func processWork(path string, headNode *html.Node, ret chan outFile, synchro *sy
 			// in it. It might not.
 			if len(text) > minLength {
 				n.Data = ""
-				for _, word := range strings.Split(text, " ") {
+				for _, word := range splitters.Split(text, -1) {
+					if whitespace.MatchString(word) {
+						continue
+					}
 					textNode := html.Node{Type: html.TextNode,
 						Data: word + " "}
 					attributes := [...]html.Attribute{html.Attribute{Key: "href",
@@ -158,13 +167,16 @@ func processWork(path string, headNode *html.Node, ret chan outFile, synchro *sy
 	}
 
 	buffer := new(bytes.Buffer)
-	err := html.Render(buffer, getHTMLTag(headNode))
+        htmlTag := getHTMLTag(headNode)
+        fmt.Println("tag is type", htmlTag.Type, "with data", htmlTag.Data)
+	err := html.Render(buffer, htmlTag)
 	if err != nil {
 		fmt.Printf("We couldn't render the nodes for %s. God help us\n", path)
 		fmt.Println("Error was", err)
 		return
 	}
 	out.Content = buffer.String()
+        fmt.Println(out.Content)
 	ret <- out
 }
 
@@ -276,15 +288,15 @@ func checkPath(path string, syncSet *mutexSet) bool {
 
 func writeFile(f *outFile) {
 	const folder = "output/"
-        re := regexp.MustCompile(`href\s*=\s*"(.*?)\.shtml"`)
+	re := regexp.MustCompile(`href\s*=\s*"(.*?)\.shtml"`)
 	location := folder + strings.Replace(f.Location, "shtml", "html", -1)
 	dir := path.Dir(location)
 	command := exec.Command("mkdir", "-p", dir)
 	command.Run()
 	b := []byte(re.ReplaceAllString(f.Content, `href="$1.html"`))
-        err := ioutil.WriteFile(location, b, 0644)
-        if err != nil {
-            fmt.Println("Something bad happened writing", location)
-            fmt.Println(err)
-        }
+	err := ioutil.WriteFile(location, b, 0644)
+	if err != nil {
+		fmt.Println("Something bad happened writing", location)
+		fmt.Println(err)
+	}
 }
